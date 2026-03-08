@@ -1,0 +1,12 @@
+[package]
+name = "rustchat_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hyper = { version = "0.14", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+rustls = "0.20"
+tokio-rustls = "0.23"
+rcgen = "0.10"
+url = "2.3"
