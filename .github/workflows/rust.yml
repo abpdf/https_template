@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64 (AMD64)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: https_template
+            asset_name: https_template-linux-amd64
+            rust_version: stable
+            needs_compiler: false
+          
+          # Linux ARM64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact_name: https_template
+            asset_name: https_template-linux-arm64
+            rust_version: stable
+            needs_compiler: false
+          
+          # Linux x86 32-bit
+          - os: ubuntu-latest
+            target: i686-unknown-linux-gnu
+            artifact_name: https_template
+            asset_name: https_template-linux-x86
+            rust_version: stable
+            needs_compiler: true
+            compiler_packages: gcc-multilib
+          
+          # Linux ARM 32-bit (ARMv7)
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            artifact_name: https_template
+            asset_name: https_template-linux-armv7
+            rust_version: stable
+            needs_compiler: true
+            compiler_packages: gcc-arm-linux-gnueabihf
+          
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: https_template.exe
+            asset_name: https_template-windows-amd64.exe
+            rust_version: 1.77.2
+            needs_compiler: false
+          
+          # Windows ARM64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact_name: https_template.exe
+            asset_name: https_template-windows-arm64.exe
+            rust_version: 1.77.2
+            needs_compiler: false
+          
+          # Windows x86 32-bit
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+            artifact_name: https_template.exe
+            asset_name: https_template-windows-x86.exe
+            rust_version: 1.77.2
+            needs_compiler: false
+          
+          # macOS Intel (AMD64)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: https_template
+            asset_name: https_template-macos-amd64
+            rust_version: stable
+            needs_compiler: false
+          
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: https_template
+            asset_name: https_template-macos-arm64
+            rust_version: stable
+            needs_compiler: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust_version }}
+          
+      # 安装目标平台
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      # 显示 Rust 版本和目标
+      - name: Show Rust info
+        run: |
+          rustc --version
+          rustup target list --installed
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Matrix OS: ${{ matrix.os }}"
+
+      # 安装交叉编译依赖 (Linux)
+      - name: Install cross-compilation dependencies
+        if: matrix.needs_compiler == true && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.compiler_packages }}
+
+      # 设置交叉编译链接器
+      - name: Set linker for ARMv7
+        if: matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+
+      - name: Set linker for i686
+        if: matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc" >> $GITHUB_ENV
+          echo "CC_i686_unknown_linux_gnu=gcc" >> $GITHUB_ENV
+
+      # macOS 特定设置
+      - name: Setup macOS environment
+        if: runner.os == 'macOS'
+        run: |
+          # 显示系统信息
+          uname -m
+          sw_vers
+          
+          # 根据目标架构设置环境
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            echo "Building for Intel (x86_64) on macOS"
+            # 在 Apple Silicon 上交叉编译到 Intel
+            if [ "$(uname -m)" = "arm64" ]; then
+              echo "Cross-compiling from ARM64 to x86_64"
+              rustup target add x86_64-apple-darwin
+            fi
+          elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            echo "Building for Apple Silicon (ARM64) on macOS"
+            # 在 Intel 上交叉编译到 ARM64
+            if [ "$(uname -m)" = "x86_64" ]; then
+              echo "Cross-compiling from x86_64 to ARM64"
+              rustup target add aarch64-apple-darwin
+            fi
+          fi
+          
+          # 设置部署目标
+          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> $GITHUB_ENV
+
+      - name: Build release
+        run: cargo build --release --verbose --target ${{ matrix.target }}
+        
+      # 处理构建产物位置 (Linux/macOS)
+      - name: Locate and rename binary (Unix-like)
+        if: runner.os != 'Windows'
+        run: |
+          # 检查交叉编译的输出目录
+          if [ -f "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+            echo "Binary copied from target/${{ matrix.target }}/release/"
+          elif [ -f "target/release/${{ matrix.artifact_name }}" ]; then
+            cp "target/release/${{ matrix.artifact_name }}" "target/${{ matrix.asset_name }}"
+            echo "Binary copied from target/release/"
+          else
+            echo "Binary not found!"
+            echo "Searching for binary..."
+            find . -name "${{ matrix.artifact_name }}" -type f 2>/dev/null || true
+            exit 1
+          fi
+          
+          # 设置可执行权限
+          chmod +x "target/${{ matrix.asset_name }}"
+          
+      # 处理构建产物位置 (Windows)
+      - name: Locate and rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (Test-Path "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}") {
+            Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+            Write-Host "Binary copied from target\${{ matrix.target }}\release\"
+          } elseif (Test-Path "target\release\${{ matrix.artifact_name }}") {
+            Copy-Item "target\release\${{ matrix.artifact_name }}" "target\${{ matrix.asset_name }}"
+            Write-Host "Binary copied from target\release\"
+          } else {
+            Write-Error "Binary not found!"
+            Get-ChildItem -Path . -Filter "${{ matrix.artifact_name }}" -Recurse
+            exit 1
+          }
+        shell: pwsh
+
+      # 验证文件
+      - name: Verify binary
+        run: |
+          if [ -f "target/${{ matrix.asset_name }}" ]; then
+            echo "✅ Binary exists: target/${{ matrix.asset_name }}"
+            ls -lh "target/${{ matrix.asset_name }}" || dir "target/${{ matrix.asset_name }}"
+          else
+            echo "❌ Binary not found!"
+            exit 1
+          fi
+        shell: bash
+
+      # 计算 SHA256 校验和 (Linux/macOS)
+      - name: Calculate SHA256 (Unix-like)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -f "target/${{ matrix.asset_name }}" ]; then
+            echo "SHA256 for ${{ matrix.asset_name }}:"
+            shasum -a 256 "target/${{ matrix.asset_name }}" | tee "target/${{ matrix.asset_name }}.sha256"
+            echo "SHA256 saved to target/${{ matrix.asset_name }}.sha256"
+          else
+            echo "File not found: target/${{ matrix.asset_name }}"
+            exit 1
+          fi
+        shell: bash
+
+      # 计算 SHA256 校验和 (Windows)
+      - name: Calculate SHA256 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if (Test-Path "target\${{ matrix.asset_name }}") {
+            Write-Host "SHA256 for ${{ matrix.asset_name }}:"
+            $hash = Get-FileHash "target\${{ matrix.asset_name }}" -Algorithm SHA256
+            $hash.Hash | Out-File -FilePath "target\${{ matrix.asset_name }}.sha256" -Encoding ascii
+            Write-Host $hash.Hash
+            Write-Host "SHA256 saved to target\${{ matrix.asset_name }}.sha256"
+          } else {
+            Write-Error "File not found: target\${{ matrix.asset_name }}"
+            exit 1
+          }
+        shell: pwsh
+
+      # 显示校验和文件内容
+      - name: Display SHA256
+        run: |
+          echo "=== SHA256 Checksum ==="
+          cat "target/${{ matrix.asset_name }}.sha256" || type "target/${{ matrix.asset_name }}.sha256"
+          echo "======================="
+        shell: bash
+
+      # 上传附件
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            target/${{ matrix.asset_name }}
+            target/${{ matrix.asset_name }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
