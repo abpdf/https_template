@@ -1,5 +1,5 @@
 [package]
-name = "https_server_example"
+name = "https_template"
 version = "0.1.0"
 edition = "2021"
 
