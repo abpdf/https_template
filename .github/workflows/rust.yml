@@ -33,24 +33,24 @@ jobs:
           # Linux x86_64 (AMD64)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: https_template
-            asset_name: https_template-linux-amd64
+            artifact_name: egui-template
+            asset_name: egui-template-linux-amd64
             rust_version: stable
             needs_compiler: false
           
           # Linux ARM64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact_name: https_template
-            asset_name: https_template-linux-arm64
+            artifact_name: egui-template
+            asset_name: egui-template-linux-arm64
             rust_version: stable
             needs_compiler: false
           
           # Linux x86 32-bit
           - os: ubuntu-latest
             target: i686-unknown-linux-gnu
-            artifact_name: https_template
-            asset_name: https_template-linux-x86
+            artifact_name: egui-template
+            asset_name: egui-template-linux-x86
             rust_version: stable
             needs_compiler: true
             compiler_packages: gcc-multilib
@@ -58,8 +58,8 @@ jobs:
           # Linux ARM 32-bit (ARMv7)
           - os: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
-            artifact_name: https_template
-            asset_name: https_template-linux-armv7
+            artifact_name: egui-template
+            asset_name: egui-template-linux-armv7
             rust_version: stable
             needs_compiler: true
             compiler_packages: gcc-arm-linux-gnueabihf
@@ -67,40 +67,40 @@ jobs:
           # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: https_template.exe
-            asset_name: https_template-windows-amd64.exe
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-amd64.exe
             rust_version: 1.77.2
             needs_compiler: false
           
           # Windows ARM64
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-            artifact_name: https_template.exe
-            asset_name: https_template-windows-arm64.exe
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-arm64.exe
             rust_version: 1.77.2
             needs_compiler: false
           
           # Windows x86 32-bit
           - os: windows-latest
             target: i686-pc-windows-msvc
-            artifact_name: https_template.exe
-            asset_name: https_template-windows-x86.exe
+            artifact_name: egui-template.exe
+            asset_name: egui-template-windows-x86.exe
             rust_version: 1.77.2
             needs_compiler: false
           
           # macOS Intel (AMD64)
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: https_template
-            asset_name: https_template-macos-amd64
+            artifact_name: egui-template
+            asset_name: egui-template-macos-amd64
             rust_version: stable
             needs_compiler: false
           
           # macOS ARM64 (Apple Silicon)
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: https_template
-            asset_name: https_template-macos-arm64
+            artifact_name: egui-template
+            asset_name: egui-template-macos-arm64
             rust_version: stable
             needs_compiler: false
 
@@ -132,18 +132,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.compiler_packages }}
 
-      # 设置交叉编译链接器
+      # 设置交叉编译链接器 (Linux ARMv7)
       - name: Set linker for ARMv7
         if: matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: |
           echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
           echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
 
+      # 设置交叉编译链接器 (Linux x86)
       - name: Set linker for i686
         if: matrix.target == 'i686-unknown-linux-gnu'
         run: |
           echo "CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc" >> $GITHUB_ENV
           echo "CC_i686_unknown_linux_gnu=gcc" >> $GITHUB_ENV
+
+      # ---------- 关键修改：为 Windows ARM64 添加编译选项 ----------
+      - name: Set Windows ARM64 build flags
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          # 添加必要的 C 编译器标志，启用 ARM64 特定的宏和 NEON 支持
+          echo "CFLAGS=-D_ARM64_WINAPI_PARTITION_DESKTOP -D_ARM64_DISTINCT_NEON_TYPES" >> $GITHUB_ENV
+          # 传递 Rust 目标特性，启用 NEON 指令集
+          echo "RUSTFLAGS=-C target-feature=+neon" >> $GITHUB_ENV
+          # 可选：强制使用 cl.exe（默认已经是）
+          echo "CC=cl.exe" >> $GITHUB_ENV
+        shell: bash
 
       # macOS 特定设置
       - name: Setup macOS environment
@@ -226,7 +239,7 @@ jobs:
           fi
         shell: bash
 
-      # 计算 SHA256 校验和 (Linux/macOS)
+      # 计算 SHA256 校验和 (Unix-like)
       - name: Calculate SHA256 (Unix-like)
         if: runner.os != 'Windows'
         run: |
